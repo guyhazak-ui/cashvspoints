@@ -42,22 +42,69 @@ CABIN_LABELS = {
 }
 
 # Loyalty-program transfer partners, best-effort mapping for common
-# frequent-flyer programs. Extend as needed.
+# frequent-flyer programs. Keys match Seats.aero's "Source" field, which is
+# lowercase with no spaces (confirmed against real API responses, e.g.
+# "virginatlantic" not "virgin atlantic"). Extend as needed.
 PROGRAM_TRANSFER_MAP = {
     "united": "Chase UR (1:1)",
     "aeroplan": "Amex MR, Chase UR, Citi TYP, Cap1 (1:1)",
-    "air canada": "Amex MR, Chase UR, Citi TYP, Cap1 (1:1)",
-    "virgin atlantic": "Amex MR, Chase UR, Citi TYP, Cap1, Bilt (1:1)",
+    "aircanada": "Amex MR, Chase UR, Citi TYP, Cap1 (1:1)",
+    "virginatlantic": "Amex MR, Chase UR, Citi TYP, Cap1, Bilt (1:1)",
     "alaska": "Marriott Bonvoy (3:1)",
     "american": "none (earn direct only)",
     "delta": "Amex MR (1:1)",
     "emirates": "Amex MR, Citi TYP, Cap1 (1:1)",
-    "avianca lifemiles": "Amex MR, Citi TYP, Cap1, Bilt (1:1)",
+    "lifemiles": "Amex MR, Citi TYP, Cap1, Bilt (1:1)",
     "ana": "Amex MR (1:1)",
-    "singapore airlines krisflyer": "Amex MR, Chase UR, Citi TYP, Cap1 (1:1)",
+    "singaporeairlines": "Amex MR, Chase UR, Citi TYP, Cap1 (1:1)",
     "turkish": "Amex MR, Chase UR, Citi TYP, Cap1, Bilt (1:1)",
     "qatar": "Amex MR, Chase UR, Citi TYP, Cap1 (1:1)",
+    "flyingblue": "Amex MR, Chase UR, Citi TYP, Cap1, Bilt (1:1)",
+    "qantas": "Amex MR, Citi TYP, Cap1 (1:1)",
+    "british": "Amex MR, Chase UR, Citi TYP, Cap1, Bilt (1:1)",
+    "jetblue": "none (earn direct only)",
+    "smiles": "none (earn direct only)",
+    "finnair": "Amex MR (1:1)",
+    "etihad": "Amex MR, Citi TYP, Cap1 (1:1)",
+    "velocity": "Amex MR, Citi TYP, Cap1, Bilt (1:1)",
+    "saudia": "—",
 }
+
+# Friendlier display names for the same programs, shown in the "Flight
+# Details & Airline" column since Seats.aero's cached-availability API
+# doesn't return per-flight airline names/numbers -- only which loyalty
+# program's award chart this pricing comes from, and which operating
+# airline codes fly the route.
+PROGRAM_DISPLAY_NAMES = {
+    "united": "United MileagePlus",
+    "aeroplan": "Air Canada Aeroplan",
+    "aircanada": "Air Canada Aeroplan",
+    "virginatlantic": "Virgin Atlantic Flying Club",
+    "alaska": "Alaska Mileage Plan",
+    "american": "American AAdvantage",
+    "delta": "Delta SkyMiles",
+    "emirates": "Emirates Skywards",
+    "lifemiles": "Avianca LifeMiles",
+    "ana": "ANA Mileage Club",
+    "singaporeairlines": "Singapore KrisFlyer",
+    "turkish": "Turkish Miles&Smiles",
+    "qatar": "Qatar Privilege Club",
+    "flyingblue": "Air France/KLM Flying Blue",
+    "qantas": "Qantas Frequent Flyer",
+    "british": "British Airways Executive Club",
+    "jetblue": "JetBlue TrueBlue",
+    "smiles": "Smiles (GOL)",
+    "finnair": "Finnair Plus",
+    "etihad": "Etihad Guest",
+    "velocity": "Virgin Australia Velocity",
+    "saudia": "Saudia Alfursan",
+}
+
+# Seats.aero's cabin field prefixes: Y=Economy, W=Premium Economy,
+# J=Business, F=First -- standard IATA booking-class letters.
+CABIN_LETTER = {"economy": "Y", "premium_economy": "W", "business": "J", "first": "F"}
+
+CURRENCY_SYMBOLS = {"USD": "$", "GBP": "£", "EUR": "€", "CAD": "$", "AUD": "$"}
 
 app = FastAPI(title="Cash vs Points API")
 
@@ -145,69 +192,146 @@ def _parse_serpapi_cash(raw, cabin):
     return options
 
 
-def _parse_seats_aero_award(raw, cabin):
-    options = []
-    if not raw:
-        return options
-    entries = raw.get("data") or raw.get("results") or (raw if isinstance(raw, list) else [])
-    for entry in entries or []:
-        try:
-            program = (entry.get("Source") or entry.get("program") or entry.get("airline") or "").lower()
-            transfer_from = PROGRAM_TRANSFER_MAP.get(program, "—")
+def _parse_seats_aero_award(raw):
+    """
+    Parses ONE Seats.aero /partnerapi/search response (covering the whole
+    requested date range) into per-cabin lists of award options.
 
-            options.append({
-                "airline": entry.get("Carrier") or entry.get("airline") or program.title() or "Unknown",
-                "flight_number": entry.get("FlightNumber") or entry.get("flight_number") or "",
-                "depart_time": entry.get("DepartsAt") or entry.get("departure_time") or "",
-                "arrival_time": entry.get("ArrivesAt") or entry.get("arrival_time") or "",
-                "direct": entry.get("Stops", 0) == 0 if entry.get("Stops") is not None else True,
-                "connection_airport": entry.get("ConnectionAirport"),
-                "cash_price": None,
-                "taxes_fees": entry.get("TotalTaxes") or entry.get("taxes") or 0,
-                "points_cost": entry.get("MileageCost") or entry.get("points") or entry.get("Cost"),
-                "transfer_from": transfer_from,
-                "cabin": cabin,
-                "source": "seats.aero",
-            })
+    Confirmed against a real response: each entry in raw['data'] is a
+    per-day, per-loyalty-program cached availability record -- NOT a
+    specific bookable flight. It has no flight number or departure/arrival
+    time; instead it carries separate Economy/Premium/Business/First
+    (Y/W/J/F) availability, points cost, and taxes for that route on that
+    date, plus which operating airline code(s) fly it and whether a direct
+    option exists. "Source" is the loyalty program whose award chart this
+    pricing comes from (e.g. "united", "virginatlantic") -- shown via
+    PROGRAM_DISPLAY_NAMES / PROGRAM_TRANSFER_MAP.
+
+    Returns: {"economy": [...], "premium_economy": [...], "business": [...],
+    "first": [...]}, each entry a dict compatible with cpp.assign_verdicts
+    and the frontend's results table.
+    """
+    results = {cabin: [] for cabin in CABIN_LETTER}
+    if not raw:
+        return results
+
+    entries = raw.get("data") or []
+    for entry in entries:
+        try:
+            route = entry.get("Route") or {}
+            program = (route.get("Source") or entry.get("Source") or "").lower()
+            transfer_from = PROGRAM_TRANSFER_MAP.get(program, "—")
+            display_name = PROGRAM_DISPLAY_NAMES.get(program, program.title() or "Unknown program")
+            entry_date = entry.get("Date", "")
+            taxes_currency = entry.get("TaxesCurrency", "USD")
+            currency_symbol = CURRENCY_SYMBOLS.get(taxes_currency, taxes_currency + " ")
+
+            for cabin_key, letter in CABIN_LETTER.items():
+                if not entry.get(f"{letter}Available"):
+                    continue
+
+                is_direct = bool(entry.get(f"{letter}Direct"))
+                direct_cost = entry.get(f"{letter}DirectMileageCostRaw") or 0
+                if is_direct and direct_cost:
+                    points_cost = direct_cost
+                    taxes_raw = entry.get(f"{letter}DirectTotalTaxesRaw") or 0
+                    airlines = entry.get(f"{letter}DirectAirlines") or entry.get(f"{letter}Airlines") or ""
+                    remaining_seats = entry.get(f"{letter}DirectRemainingSeatsRaw")
+                else:
+                    is_direct = False
+                    points_cost = entry.get(f"{letter}MileageCostRaw") or 0
+                    taxes_raw = entry.get(f"{letter}TotalTaxesRaw") or 0
+                    airlines = entry.get(f"{letter}Airlines") or ""
+                    remaining_seats = entry.get(f"{letter}RemainingSeatsRaw")
+
+                if not points_cost or not remaining_seats:
+                    continue  # no real bookable availability
+
+                taxes_amount = round(taxes_raw / 100.0, 2)
+
+                results[cabin_key].append({
+                    "airline": f"{display_name} ({airlines})" if airlines else display_name,
+                    "flight_number": "",
+                    "depart_time": entry_date,
+                    "arrival_time": "",
+                    "direct": is_direct,
+                    "connection_airport": None,
+                    "cash_price": None,
+                    "taxes_fees": taxes_amount,
+                    "taxes_currency": taxes_currency,
+                    "taxes_display": f"{currency_symbol}{taxes_amount:.0f}",
+                    "points_cost": points_cost,
+                    "transfer_from": transfer_from,
+                    "cabin": cabin_key,
+                    "source": "seats.aero",
+                    "_program": program,
+                })
         except Exception:
             continue
-    return options
+    return results
+
+
+def _dedupe_award_options(options):
+    """Seats.aero returns one record per day in the requested date range, so
+    the same loyalty program can appear multiple times (once per date).
+    Keep only the cheapest (lowest points_cost) instance per program so the
+    table stays readable, and surface which date that instance applies to
+    via depart_time (already the date string)."""
+    best_by_program = {}
+    for o in options:
+        key = o.get("_program", o["airline"])
+        if key not in best_by_program or o["points_cost"] < best_by_program[key]["points_cost"]:
+            best_by_program[key] = o
+    return list(best_by_program.values())
 
 
 def _run_full_search(origin, destination, depart_date, return_date, passengers):
-    cabins_out = {}
+    cabins_out = {cabin: [] for cabin in CABINS}
     warnings = []
 
+    # Cash: one call per cabin -- SerpApi's travel_class param genuinely
+    # filters results (confirmed: Economy/Premium/Business/First return
+    # distinctly different price sets), so this can't be collapsed to one call.
+    cash_by_cabin = {}
     for cabin in CABINS:
-        cash_options, award_options = [], []
-
         try:
             raw_cash = travel_tools.search_flights_serpapi(
                 origin, destination, depart_date, return_date,
                 travel_class=cabin, adults=passengers,
             )
-            cash_options = _parse_serpapi_cash(raw_cash, cabin)
+            cash_by_cabin[cabin] = _parse_serpapi_cash(raw_cash, cabin)
         except travel_tools.MissingAPIKeyError as e:
             warnings.append(_sanitize_error(f"Cash search ({CABIN_LABELS[cabin]}): {e}"))
         except Exception as e:
             warnings.append(_sanitize_error(f"Cash search ({CABIN_LABELS[cabin]}) failed: {e}"))
 
-        try:
-            raw_award = travel_tools.search_award_availability(
-                origin, destination, depart_date, return_date or depart_date, cabin=cabin,
-            )
-            award_options = _parse_seats_aero_award(raw_award, cabin)
-        except travel_tools.MissingAPIKeyError as e:
-            warnings.append(_sanitize_error(f"Award search ({CABIN_LABELS[cabin]}): {e}"))
-        except Exception as e:
-            warnings.append(_sanitize_error(f"Award search ({CABIN_LABELS[cabin]}) failed: {e}"))
+    # Award: ONE call covers all 4 cabins at once -- Seats.aero's response
+    # includes separate Y/W/J/F (economy/premium/business/first) pricing on
+    # every record regardless of the "cabin" query param, so calling it
+    # per-cabin (as an earlier version of this code did) was 4x redundant
+    # against a metered API plan.
+    award_by_cabin = {cabin: [] for cabin in CABINS}
+    try:
+        raw_award = travel_tools.search_award_availability(
+            origin, destination, depart_date, return_date or depart_date,
+        )
+        award_by_cabin = _parse_seats_aero_award(raw_award)
+    except travel_tools.MissingAPIKeyError as e:
+        warnings.append(_sanitize_error(f"Award search: {e}"))
+    except Exception as e:
+        warnings.append(_sanitize_error(f"Award search failed: {e}"))
+
+    for cabin in CABINS:
+        cash_options = cash_by_cabin.get(cabin, [])
+        award_options = _dedupe_award_options(award_by_cabin.get(cabin, []))
 
         # Use the cheapest cash price in this cabin as the comparison point
-        # for CPP yield, if the award API doesn't provide its own cash comp.
+        # for CPP yield (Seats.aero doesn't return its own cash comparison).
+        # Note: if taxes are in a non-USD currency (see taxes_currency),
+        # this comparison isn't currency-converted -- a known simplification.
         cheapest_cash = min((o["cash_price"] for o in cash_options if o["cash_price"]), default=None)
         for a in award_options:
-            comp_cash_price = a.get("cash_price") or cheapest_cash
-            a["cpp_yield"] = compute_cpp(comp_cash_price, a.get("taxes_fees"), a.get("points_cost"))
+            a["cpp_yield"] = compute_cpp(cheapest_cash, a.get("taxes_fees"), a.get("points_cost"))
 
         combined = assign_verdicts(cash_options + award_options)
         if combined:
@@ -311,9 +435,10 @@ def ai_query(req: AIQueryRequest):
             + (f" – {parsed['return_date']}." if parsed.get("return_date") else "."),
         ]
         if bp:
+            taxes_text = bp.get("taxes_display") or f"${bp.get('taxes_fees', 0):.0f}"
             reply_parts.append(
                 f"Best points value: {bp['airline']} for {bp['points_cost']:,} points "
-                f"(+${bp.get('taxes_fees', 0):.0f} fees), a {bp['cpp_yield']}¢/point yield."
+                f"(+{taxes_text} fees), a {bp['cpp_yield']}¢/point yield."
             )
         if cc:
             reply_parts.append(f"Cheapest cash deal: {cc['airline']} at ${cc['cash_price']:.0f}.")
