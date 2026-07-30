@@ -256,6 +256,23 @@ def _error_response(e):
     return payload
 
 
+@app.get("/api/debug-award")
+def debug_award(origin: str, destination: str, start: str, end: str, cabin: Optional[str] = None):
+    """TEMPORARY: returns the raw, unparsed Seats.aero response so the
+    exact field names can be verified against live data and
+    _parse_seats_aero_award() can be corrected. Gated behind DEBUG=true
+    since it proxies arbitrary queries against your metered Seats.aero
+    plan -- remove this route (and the DEBUG env var) once the award
+    parser is confirmed working against real data."""
+    if not DEBUG:
+        return {"error": "Debug endpoints are disabled. Set DEBUG=true in environment variables to enable."}
+    try:
+        raw = travel_tools.search_award_availability(origin, destination, start, end, cabin=cabin)
+        return raw
+    except Exception as e:
+        return _error_response(e)
+
+
 @app.post("/api/search")
 def search(req: SearchRequest):
     try:
@@ -274,7 +291,8 @@ def ai_query(req: AIQueryRequest):
         parsed = parse_query(req.query)
         if not parsed.get("origin") or not parsed.get("destination"):
             return {
-                "error": "Could not identify both an origin and destination airport in that query.",
+                "error": "Couldn't recognize one of those airports/cities. Try naming a major "
+                         "city (e.g. \"Tel Aviv\") or a 3-letter airport code (e.g. \"TLV\") directly.",
                 "parsed_request": parsed,
             }
 
