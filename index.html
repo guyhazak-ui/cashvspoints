@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cash vs Points — Fly smarter with cash or miles</title>
+<meta name="description" content="Compare cash flight prices against points/miles redemptions instantly. Built for frequent flyers and credit card points enthusiasts." />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-glow"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">✈</span>
+      <span class="brand-name">Cash <span class="vs">vs</span> Points</span>
+    </div>
+    <div class="topbar-tag">Best value flight search — cash or miles</div>
+  </header>
+
+  <main class="hero">
+    <h1>Fly smarter. Cash <span class="vs-accent">or</span> points.</h1>
+    <p class="subhead">Search once, see both sides instantly — with CPP yield so you know exactly what your points are worth.</p>
+
+    <div class="mode-toggle" role="tablist" aria-label="Search mode">
+      <button class="mode-btn active" id="mode-ai-btn" role="tab" aria-selected="true">
+        <span class="mode-icon">💬</span>
+        <span>
+          <span class="mode-title">AI Travel Agent</span>
+          <span class="mode-sub">Natural language</span>
+        </span>
+      </button>
+      <button class="mode-btn" id="mode-search-btn" role="tab" aria-selected="false">
+        <span class="mode-icon">🔎</span>
+        <span>
+          <span class="mode-title">Search Engine</span>
+          <span class="mode-sub">Structured, power-user</span>
+        </span>
+      </button>
+    </div>
+
+    <!-- MODE A: AI Travel Agent -->
+    <section id="panel-ai" class="panel">
+      <div class="chat-window" id="chat-window">
+        <div class="chat-msg assistant">
+          <div class="avatar">✈</div>
+          <div class="bubble">
+            Hey! Tell me where you're flying and I'll compare cash prices against points/miles for you. Try:
+            <em>"I want to fly from JFK to LAX next weekend in business class using Chase points or cash, what's my best option?"</em>
+          </div>
+        </div>
+      </div>
+      <form id="chat-form" class="chat-input-row">
+        <input type="text" id="chat-input" placeholder="Ask about any route, dates, and cabin class…" autocomplete="off" required />
+        <button type="submit" id="chat-submit">Ask</button>
+      </form>
+    </section>
+
+    <!-- MODE B: Structured Search -->
+    <section id="panel-search" class="panel hidden">
+      <form id="search-form" class="search-form">
+        <div class="field">
+          <label for="origin">Origin</label>
+          <input type="text" id="origin" placeholder="JFK or New York" required />
+        </div>
+        <div class="field">
+          <label for="destination">Destination</label>
+          <input type="text" id="destination" placeholder="LHR or London" required />
+        </div>
+        <div class="field">
+          <label for="depart_date">Depart</label>
+          <input type="date" id="depart_date" required />
+        </div>
+        <div class="field">
+          <label for="return_date">Return (optional)</label>
+          <input type="date" id="return_date" />
+        </div>
+        <div class="field field-narrow">
+          <label for="passengers">Passengers</label>
+          <input type="number" id="passengers" min="1" max="9" value="1" />
+        </div>
+        <button type="submit" class="search-submit">Search flights</button>
+      </form>
+    </section>
+
+    <!-- Loading state -->
+    <section id="loading" class="loading hidden">
+      <div class="spinner"></div>
+      <div class="loading-text" id="loading-text">Digging through fare classes…</div>
+    </section>
+
+    <!-- Results -->
+    <section id="results" class="results hidden">
+      <div class="summary-card" id="summary-card"></div>
+      <div id="cabin-sections"></div>
+      <div id="warnings" class="warnings hidden"></div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    Built for frequent flyers · CPP = (cash price − taxes &amp; fees) ÷ points × 100
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
